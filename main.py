@@ -1,271 +1,270 @@
 import discord
 from discord import app_commands
-import json
-import os
+from discord.ext import commands
+from keep_alive import keep_alive
 import datetime
-from typing import Optional
-import asyncio
-from fastapi import FastAPI, Request, HTTPException
-import uvicorn
-import requests
 
-# Inicialização do Servidor Web (FastAPI) para o Webhook da AbacatePay
-app = FastAPI()
+# ==========================================================
+# 🛠️ CONFIGURAÇÃO DE INTENTS E INICIALIZAÇÃO
+# ==========================================================
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True  # Necessário para os comandos de moderação (ban, kick, mute)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-class LockStoreBot(discord.Client):
-    def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.members = True
-        super().__init__(intents=intents)
-        self.tree = app_commands.CommandTree(self)
 
-    async def setup_hook(self):
-        await self.tree.sync()
+# ==========================================================
+# 🛡️ SISTEMA DE MODERAÇÃO (COMANDOS SLASH)
+# ==========================================================
 
-bot = LockStoreBot()
-DATA_FILE = "store_data.json"
-
-# --- CONFIGURAÇÕES DE API ---
-# Pega o token da AbacatePay que você configurará no Render
-ABACATEPAY_KEY = os.getenv("ABACATEPAY_KEY") 
-
-# --- FUNÇÕES DE BANCO DE DADOS LOCAL (JSON) ---
-def carregar_dados():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return resetar_dados()
-    return resetar_dados()
-
-def resetar_dados():
-    default = {
-        "usuarios": {},
-        "catalogo": {},
-        "cupons": {},
-    }
-    salvar_dados(default)
-    return default
-
-def salvar_dados(dados):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(dados, f, indent=4, ensure_ascii=False)
-
-# --- WEBHOOK DA ABACATEPAY (ENTREGA AUTOMÁTICA) ---
-@app.post("/webhook")
-async def receber_pagamento(request: Request):
+# 1. Comando: Banir Usuário (/ban)
+@bot.tree.command(name="ban", description="🛡️ [Moderação] Bane um membro do servidor")
+@app_commands.checks.has_permissions(ban_members=True)
+async def ban(interaction: discord.Interaction, membro: discord.Member, motivo: str = "Sem motivo especificado"):
     try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Payload inválido")
-    
-    # 1. Verifica se o evento recebido é de pagamento concluído
-    if payload.get("event") == "checkout.completed":
-        data = payload.get("data", {})
-        metadata = data.get("metadata", {})
-        
-        # Recuperamos o ID do Discord do comprador e o produto que passamos na criação
-        user_id = metadata.get("user_id")
-        nome_produto = metadata.get("product_name")
-        
-        if user_id and nome_produto:
-            user_id = int(user_id)
-            dados = carregar_dados()
-            catalogo = dados["catalogo"]
-            produto_formatado = nome_produto.title()
-            
-            if produto_formatado in catalogo:
-                produto = catalogo[produto_formatado]
-                estoque = produto.get("estoque", [])
-                
-                # Se tiver estoque disponível
-                if len(estoque) > 0:
-                    entrega = estoque.pop(0)  # Pega e remove o primeiro item do estoque (linha)
-                    dados["catalogo"][produto_formatado]["estoque"] = estoque
-                    salvar_dados(dados)
-                    
-                    # Tenta enviar o produto diretamente na DM do usuário no Discord
-                    try:
-                        user = await bot.fetch_user(user_id)
-                        embed_dm = discord.Embed(
-                            title="📦 Pagamento Confirmado - Entrega Automática!",
-                            description=f"Seu pagamento via **AbacatePay** foi aprovado com sucesso!\n\nAqui está o seu produto:\n\n```\n{entrega}\n```",
-                            color=0x2ecc71
-                        )
-                        embed_dm.set_footer(text="Obrigado por comprar conosco!")
-                        await user.send(embed=embed_dm)
-                        print(f"Produto {produto_formatado} entregue com sucesso para o usuário {user_id}.")
-                    except Exception as e:
-                        print(f"Não consegui enviar a DM para o usuário {user_id}: {e}")
-                else:
-                    # Caso o estoque acabe na fração de segundo do pagamento
-                    try:
-                        user = await bot.fetch_user(user_id)
-                        await user.send(f"⚠️ Seu pagamento para **{produto_formatado}** foi aprovado, mas o estoque esgotou nesse meio tempo! Entre em contato com o suporte para receber manualmente.")
-                    except Exception:
-                        pass
-                    print(f"Estoque esgotado para {produto_formatado} comprado por {user_id}")
-                    
-    return {"status": "success"}
-
-@app.get("/")
-def home():
-    return {"status": "Bot e Webhook da AbacatePay Rodando!"}
-
-# --- COMANDO PRINCIPAL: GERAR COBRANÇA (COMPRAR) ---
-@bot.tree.command(name="comprar", description="Gera um link de pagamento Pix/Cartão para comprar um produto")
-async def comprar(interaction: discord.Interaction, item: str):
-    dados = carregar_dados()
-    catalogo = dados["catalogo"]
-    
-    item_formatado = item.title()
-    if item_formatado not in catalogo:
-        await interaction.response.send_message(f"❌ O produto **{item}** não existe no catálogo!", ephemeral=True)
-        return
-        
-    produto = catalogo[item_formatado]
-    estoque = produto.get("estoque", [])
-    
-    # Verifica se há estoque antes de criar a cobrança
-    if len(estoque) == 0:
-        await interaction.response.send_message(f"❌ O produto **{item_formatado}** está sem estoque no momento!", ephemeral=True)
-        return
-
-    # Evita erros caso você não tenha colocado a Chave de API no Render ainda
-    if not ABACATEPAY_KEY:
-        await interaction.response.send_message("❌ Erro no sistema: A chave da API da AbacatePay não foi configurada pelo administrador.", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True) # Dá tempo para o bot carregar a API da AbacatePay
-
-    # Converte o preço do seu catálogo para centavos (A AbacatePay trabalha em centavos: R$ 10,00 = 1000)
-    preco_centavos = int(produto["preco"] * 100)
-
-    # Criação do checkout na API da AbacatePay
-    url = "https://api.abacatepay.com/v1/checkout/create"
-    headers = {
-        "Authorization": f"Bearer {ABACATEPAY_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "frequency": "ONE_TIME",
-        "methods": ["PIX"], # focado em PIX
-        "products": [
-            {
-                "externalId": item_formatado.lower().replace(" ", "-"),
-                "name": item_formatado,
-                "quantity": 1,
-                "price": preco_centavos
-            }
-        ],
-        "returnUrl": "https://discord.com", # Para onde o cliente vai após pagar
-        # O segredo está aqui: salvamos quem está comprando e o que está comprando
-        "metadata": {
-            "user_id": str(interaction.user.id),
-            "product_name": item_formatado
-        }
-    }
-
-    try:
-        response = requests.post(url, json=payload, headers=headers)
-        res_data = response.json()
-        
-        # Se a criação deu certo, pegamos o link de pagamento
-        if response.status_code == 200 or response.status_code == 201:
-            checkout_url = res_data["data"]["url"]
-            
-            embed = discord.Embed(
-                title="💳 Quase lá! Complete seu pagamento",
-                description=f"Você está adquirindo: **{item_formatado}**\nValor: **R$ {produto['preco']:.2f}**\n\nClique no botão abaixo para pagar via Pix na AbacatePay. Assim que pagar, seu produto será enviado automaticamente aqui na sua DM!",
-                color=0x3498db
-            )
-            
-            # Botão clicável bonito no Discord para ir ao pagamento
-            view = discord.ui.View()
-            view.add_item(discord.ui.Button(label="Pagar Agora (PIX)", url=checkout_url, style=discord.ButtonStyle.link))
-            
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        else:
-            erro_msg = res_data.get("error", "Erro desconhecido")
-            await interaction.followup.send(f"❌ Erro ao gerar pagamento na AbacatePay: {erro_msg}", ephemeral=True)
-            
-    except Exception as e:
-        await interaction.followup.send(f"❌ Erro de conexão com o gateway de pagamento: {e}", ephemeral=True)
-
-# --- COMANDOS DE MODERAÇÃO ---
-class ModeracaoGrupo(app_commands.Group):
-    def __init__(self):
-        super().__init__(name="mod", description="Comandos de moderação")
-
-    @app_commands.command(name="kick", description="Expulsa um membro")
-    @app_commands.default_permissions(kick_members=True)
-    async def kick(self, interaction: discord.Interaction, membro: discord.Member, motivo: Optional[str] = "Não especificado"):
-        await membro.kick(reason=motivo)
-        await interaction.response.send_message(f"👞 {membro.mention} foi expulso! Motivo: {motivo}")
-
-    @app_commands.command(name="ban", description="Bane um membro")
-    @app_commands.default_permissions(ban_members=True)
-    async def ban(self, interaction: discord.Interaction, membro: discord.Member, motivo: Optional[str] = "Não especificado"):
         await membro.ban(reason=motivo)
-        await interaction.response.send_message(f"🔨 {membro.mention} foi banido! Motivo: {motivo}")
+        embed = discord.Embed(
+            title="🔨 Usuário Banido",
+            description=f"O membro {membro.mention} foi banido com sucesso.",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="Motivo:", value=motivo, inline=False)
+        embed.set_footer(text=f"Moderador: {interaction.user}")
+        await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Não consegui banir o membro. Erro: {e}", ephemeral=True)
 
-    @app_commands.command(name="mute", description="Silencia um membro")
-    @app_commands.default_permissions(moderate_members=True)
-    async def mute(self, interaction: discord.Interaction, membro: discord.Member, minutos: int, motivo: Optional[str] = "Não especificado"):
-        duracao = datetime.timedelta(minutes=minutos)
+
+# 2. Comando: Expulsar Usuário (/kick)
+@bot.tree.command(name="kick", description="🛡️ [Moderação] Expulsa um membro do servidor")
+@app_commands.checks.has_permissions(kick_members=True)
+async def kick(interaction: discord.Interaction, membro: discord.Member, motivo: str = "Sem motivo especificado"):
+    try:
+        await membro.kick(reason=motivo)
+        embed = discord.Embed(
+            title="👢 Usuário Expulso",
+            description=f"O membro {membro.mention} foi expulso do servidor.",
+            color=discord.Color.orange()
+        )
+        embed.add_field(name="Motivo:", value=motivo, inline=False)
+        embed.set_footer(text=f"Moderador: {interaction.user}")
+        await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Não consegui expulsar o membro. Erro: {e}", ephemeral=True)
+
+
+# 3. Comando: Silenciar Usuário (/mute)
+@bot.tree.command(name="mute", description="🛡️ [Moderação] Silencia um usuário temporariamente (Timeout)")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def mute(interaction: discord.Interaction, membro: discord.Member, tempo_minutos: int, motivo: str = "Sem motivo"):
+    try:
+        duracao = datetime.timedelta(minutes=tempo_minutos)
         await membro.timeout(duracao, reason=motivo)
-        await interaction.response.send_message(f"🔇 {membro.mention} silenciado por {minutos}m! Motivo: {motivo}")
+        embed = discord.Embed(
+            title="🔇 Usuário Silenciado",
+            description=f"{membro.mention} foi colocado de castigo.",
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="Duração:", value=f"{tempo_minutos} minutos", inline=True)
+        embed.add_field(name="Motivo:", value=motivo, inline=True)
+        embed.set_footer(text=f"Moderador: {interaction.user}")
+        await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Não consegui silenciar o usuário. Erro: {e}", ephemeral=True)
 
-# --- COMANDOS DO PRODUTO E ESTOQUE ---
-class CatalogoGrupo(app_commands.Group):
-    def __init__(self):
-        super().__init__(name="catalogo", description="Gerenciar produtos")
 
-    @app_commands.command(name="criar", description="Cadastra um produto")
-    @app_commands.default_permissions(administrator=True)
-    async def criar(self, interaction: discord.Interaction, nome: str, preco_reais: float, descricao: str):
-        dados = carregar_dados()
-        dados["catalogo"][nome.title()] = {"preco": preco_reais, "descricao": descricao, "estoque": []}
-        salvar_dados(dados)
-        await interaction.response.send_message(f"📦 Produto **{nome.title()}** cadastrado por **R$ {preco_reais:.2f}**!")
-
-    @app_commands.command(name="estoque", description="Adiciona estoque por linhas")
-    @app_commands.default_permissions(administrator=True)
-    async def estoque(self, interaction: discord.Interaction, produto: str, itens: str):
-        dados = carregar_dados()
-        prod = produto.title()
-        if prod not in dados["catalogo"]:
-            await interaction.response.send_message("❌ Produto inexistente!", ephemeral=True)
-            return
-        novas_linhas = [l.strip() for l in itens.split("\n") if l.strip()]
-        dados["catalogo"][prod]["estoque"].extend(novas_linhas)
-        salvar_dados(dados)
-        await interaction.response.send_message(f"✅ Adicionado {len(novas_linhas)} itens ao estoque de **{prod}**!")
-
-# Registro dos Grupos no Bot
-bot.tree.add_command(ModeracaoGrupo())
-bot.tree.add_command(CatalogoGrupo())
-
-# --- EXECUÇÃO EM SEGUNDO PLANO ---
-async def rodar_webserver():
-    config = uvicorn.Config(app, host="0.0.0.0", port=10000, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
-
-async def main():
-    token = os.getenv("DISCORD_TOKEN")
-    if not token:
-        print("ERRO: Variável de ambiente 'DISCORD_TOKEN' não configurada!")
-        return
+# 4. Comando: Limpar Chat (/clear)
+@bot.tree.command(name="clear", description="🧹 [Moderação] Limpa mensagens do chat atual")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def clear(interaction: discord.Interaction, quantidade: int):
+    if quantidade < 1 or quantidade > 100:
+        return await interaction.response.send_message("❌ Escolha um número entre 1 e 100.", ephemeral=True)
     
-    await asyncio.gather(
-        bot.start(token),
-        rodar_webserver()
+    await interaction.response.defer(ephemeral=True) # Evita timeout da API do Discord
+    deleted = await interaction.channel.purge(limit=quantidade)
+    await interaction.followup.send(f"🧹 Chat limpo! Removi `{len(deleted)}` mensagens.", ephemeral=True)
+
+
+# ==========================================================
+# 📦 SISTEMA DE VENDAS (LOCK SYSTEM) - INTERFACES & MODAL
+# ==========================================================
+
+# Modal de Criação de Produto (O formulário interativo)
+class CriarProdutoModal(discord.ui.Modal, title="📦 Criando Produto"):
+    referencia = discord.ui.TextInput(
+        label="Referencia *", 
+        placeholder="EX: gemas-roblox",
+        required=True
+    )
+    titulo = discord.ui.TextInput(
+        label="Titulo", 
+        placeholder="Título visível do produto",
+        required=False
+    )
+    descricao = discord.ui.TextInput(
+        label="Descrição", 
+        style=discord.TextStyle.paragraph,
+        placeholder="Escreva detalhes do produto aqui...",
+        required=False,
+        max_length=2000
+    )
+    valor = discord.ui.TextInput(
+        label="Valor", 
+        placeholder="Ex: 4.60",
+        required=False
+    )
+    canais = discord.ui.TextInput(
+        label="Canais", 
+        placeholder="ID do canal onde o produto será postado",
+        required=False
     )
 
-if __name__ == "__main__":
-    asyncio.run(main())
-          
+    async def on_submit(self, interaction: discord.Interaction):
+        ref = self.referencia.value
+        tit = self.titulo.value or "Sem título"
+        val = self.valor.value or "0.00"
+        
+        embed = discord.Embed(
+            title="✅ Produto Criado no Lock System!",
+            description=f"**Referência:** `{ref}`\n**Título:** {tit}\n**Valor:** R$ {val}",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# Menu de Gerenciamento de Produtos (Com paginação)
+class GerenciadorProdutosView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        
+    @discord.ui.select(
+        placeholder="📦 Selecione um produto para gerenciar",
+        options=[
+            discord.SelectOption(label="N1trada", description="Referência: 7-99", emoji="⚡"),
+            discord.SelectOption(label="Ativação n1trada", description="Referência: 2-02", emoji="💎"),
+            discord.SelectOption(label="Dados", description="Referência: PUXAR--DADOS", emoji="🔍")
+        ]
+    )
+    async def select_product(self, interaction: discord.Interaction, select: discord.ui.Select):
+        produto_nome = select.values[0]
+        
+        embed = discord.Embed(
+            title=f"📦 Editando: {produto_nome}",
+            description="Use as opções abaixo para alterar as configurações do produto.",
+            color=0x2f3136
+        )
+        await interaction.response.edit_message(embed=embed, view=MenuEdicaoProdutoView())
+
+    @discord.ui.button(label="Anterior", style=discord.ButtonStyle.grey, disabled=True, row=1)
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Início", style=discord.ButtonStyle.grey, disabled=True, row=1)
+    async def home_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Próxima", style=discord.ButtonStyle.grey, disabled=True, row=1)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Criar Produto", style=discord.ButtonStyle.green, emoji="➕", row=2)
+    async def create_product(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(CriarProdutoModal())
+
+    @discord.ui.button(label="Voltar", style=discord.ButtonStyle.red, row=2)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await voltar_painel_principal(interaction)
+
+
+# Menu de Edição para o Produto Selecionado
+class MenuEdicaoProdutoView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Voltar ao Gerenciamento", style=discord.ButtonStyle.red)
+    async def back_to_management(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="⚙️ Gerenciamento de Produtos",
+            description="Gerencie ou crie os seus produtos abaixo.\n\n**Estatísticas:**\n└ Total de Produtos: **3**\n└ Ativos: **3**",
+            color=0x2f3136
+        )
+        await interaction.response.edit_message(embed=embed, view=GerenciadorProdutosView())
+
+
+# Painel de Controle Principal (Home)
+class PainelPrincipalView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.select(
+        placeholder="🏠 Selecione uma área para gerenciar",
+        options=[
+            discord.SelectOption(label="Gerenciamento de Produtos", description="Crie, edite ou remova produtos", emoji="📦"),
+            discord.SelectOption(label="Configurações de Vendas", description="Ajuste termos e cargos", emoji="⚙️")
+        ]
+    )
+    async def main_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        area = select.values[0]
+        
+        if area == "Gerenciamento de Produtos":
+            embed = discord.Embed(
+                title="⚙️ Gerenciamento de Produtos",
+                description="Gerencie ou crie os seus produtos abaixo.\n\n**Estatísticas:**\n└ Total de Produtos: **3**\n└ Ativos: **3**",
+                color=0x2f3136
+            )
+            await interaction.response.edit_message(embed=embed, view=GerenciadorProdutosView())
+            
+        elif area == "Configurações de Vendas":
+            await interaction.response.send_message("⚙️ Menu de configurações de vendas em breve...", ephemeral=True)
+
+    @discord.ui.button(label="Fechar Loja", style=discord.ButtonStyle.red, emoji="🔒")
+    async def close_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("🔒 A loja do Lock System foi fechada temporariamente!", ephemeral=True)
+
+
+# Função Auxiliar de Navegação
+async def voltar_painel_principal(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🔒 Lock System - Painel de Controle",
+        description=f"Olá, {interaction.user.mention}! Aqui está o resumo da sua loja.\n\n**Visão Geral**\n└ Status: 🟢 **Online**\n└ Notificações pendentes: **0**",
+        color=0x2f3136
+    )
+    await interaction.response.edit_message(embed=embed, view=PainelPrincipalView())
+
+
+# ==========================================================
+# 🚀 COMANDOS GERAIS & INICIALIZAÇÃO
+# ==========================================================
+
+# Comando Slash principal para abrir a loja
+@bot.tree.command(name="painel", description="Acesse o Painel de Controle do seu Lock System")
+async def painel(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🔒 Lock System - Painel de Controle",
+        description=f"Olá, {interaction.user.mention}! Aqui está o resumo da sua loja.\n\n**Visão Geral**\n└ Status: 🟢 **Online**\n└ Notificações pendentes: **0**",
+        color=0x2f3136
+    )
+    # Abre apenas para o administrador de forma efêmera (oculta)
+    await interaction.response.send_message(embed=embed, view=PainelPrincipalView(), ephemeral=True)
+
+
+@bot.event
+async def on_ready():
+    print(f"🤖 Lock System online como {bot.user}!")
+    try:
+        synced = await bot.tree.sync()
+        print(f"🔄 Sincronizados {len(synced)} comandos de barra (Slash).")
+    except Exception as e:
+        print(f"Erro ao sincronizar comandos: {e}")
+
+
+# Tratamento de erro caso alguém tente moderar sem permissão
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ Você não tem permissões administrativas para executar este comando!", ephemeral=True)
+
+# Liga o Keep Alive do Render e inicia o bot
+keep_alive()
+bot.run("SEU_TOKEN_AQUI")  # <--- COLOQUE SEU TOKEN DO DISCORD AQUI!
+        
