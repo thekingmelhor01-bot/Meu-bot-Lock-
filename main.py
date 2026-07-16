@@ -80,6 +80,8 @@ class ProdutoSelect(discord.ui.Select):
         for prod in PRODUTOS_MOCK[:5]:
             options.append(discord.SelectOption(
                 label=prod["titulo"],
+
+                
                 description=f"Referência: {prod['ref']}",
                 emoji="📦"
             ))
