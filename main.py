@@ -4,6 +4,7 @@ from discord.ext import commands
 from discord.ui import Select, View, Button, Modal, TextInput
 from keep_alive import keep_alive
 import datetime
+import os
 
 # ==========================================================
 # 🛠️ CONFIGURAÇÃO DE INTENTS E INICIALIZAÇÃO
@@ -23,7 +24,7 @@ PRODUTOS_MOCK = [
 ]
 
 # ==========================================================
-# 📋 MODAL NATIVO: CRIANDO PRODUTO (Imagem 2)
+# 📋 MODAL NATIVO: CRIANDO PRODUTO
 # ==========================================================
 class CriarProdutoModal(Modal, title="Criando Produto"):
     referencia = TextInput(label="Referencia *", placeholder="EX: gemas-roblox", required=True)
@@ -33,7 +34,6 @@ class CriarProdutoModal(Modal, title="Criando Produto"):
     canais = TextInput(label="Canais (Opcional)", placeholder="ID do canal para envio", required=False)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Transforma o valor digitado em float com segurança
         try:
             preco_float = float(self.valor.value.replace(',', '.'))
         except ValueError:
@@ -54,10 +54,9 @@ class CriarProdutoModal(Modal, title="Criando Produto"):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ==========================================================
-# 🎛️ VIEWS E MENUS DE SELEÇÃO (INTERFACES EXCLUSIVAS)
+# 🎛️ VIEWS E MENUS DE SELEÇÃO
 # ==========================================================
 
-# Seletor de Gerenciamento do Painel Principal (Imagem 5)
 class PainelPrincipalSelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -70,16 +69,15 @@ class PainelPrincipalSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         if self.values[0] == "Gerenciamento de Produtos":
             await enviar_painel_produtos(interaction)
-        elif self.values[0] == "Configuracoes de Vendas":
+        elif self.values[0] == "Configurações de Vendas":
             await enviar_configuracoes_vendas(interaction)
         else:
             await interaction.response.send_message(f"Área '{self.values[0]}' selecionada!", ephemeral=True)
 
-# Seletor de Produtos Cadastrados (Imagem 3)
 class ProdutoSelect(discord.ui.Select):
     def __init__(self):
         options = []
-        for prod in PRODUTOS_MOCK[:5]: # Exibe até os 5 primeiros
+        for prod in PRODUTOS_MOCK[:5]:
             options.append(discord.SelectOption(
                 label=prod["titulo"],
                 description=f"Referência: {prod['ref']}",
@@ -92,10 +90,9 @@ class ProdutoSelect(discord.ui.Select):
         await interaction.response.send_message(f"⚙️ Abrindo configurações do produto: **{produto_selecionado}**", ephemeral=True)
 
 # ==========================================================
-# 🖼️ FUNÇÕES GERADORAS DE TELAS (REPRODUZINDO OS PRINTS)
+# 🖼️ FUNÇÕES GERADORAS DE TELAS (INTERFACES DOS PRINTS)
 # ==========================================================
 
-# Tela: Gerenciamento de Produtos (Imagem 4)
 async def enviar_painel_produtos(interaction: discord.Interaction):
     total = len(PRODUTOS_MOCK)
     embed = discord.Embed(
@@ -109,11 +106,8 @@ async def enviar_painel_produtos(interaction: discord.Interaction):
     )
     
     view = View()
-    
-    # Seletor de Produtos (Imagem 3)
     view.add_item(ProdutoSelect())
     
-    # Linha de botões de controle
     btn_anterior = Button(label="Anterior", style=discord.ButtonStyle.green, disabled=True, row=1)
     btn_inicio = Button(label="Início", style=discord.ButtonStyle.grey, disabled=True, row=1)
     btn_proxima = Button(label="Próxima", style=discord.ButtonStyle.green, disabled=True, row=1)
@@ -123,12 +117,10 @@ async def enviar_painel_produtos(interaction: discord.Interaction):
     btn_atualizar = Button(label="Atualizar", style=discord.ButtonStyle.green, emoji="🔄", row=3)
     btn_voltar = Button(label="Voltar", style=discord.ButtonStyle.red, emoji="↩️", row=3)
 
-    # Callback para abrir o modal de criação nativo ao clicar em "Criar Produto"
     async def criar_callback(inter: discord.Interaction):
         await inter.response.send_modal(CriarProdutoModal())
     btn_criar.callback = criar_callback
 
-    # Callback para voltar ao painel de controle principal
     async def voltar_callback(inter: discord.Interaction):
         await enviar_painel_controle(inter)
     btn_voltar.callback = voltar_callback
@@ -143,7 +135,6 @@ async def enviar_painel_produtos(interaction: discord.Interaction):
 
     await interaction.response.edit_message(embed=embed, view=view)
 
-# Tela: Configurações de Vendas (Imagem 1)
 async def enviar_configuracoes_vendas(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🛒 Configurações de Vendas",
@@ -162,7 +153,6 @@ async def enviar_configuracoes_vendas(interaction: discord.Interaction):
     
     await interaction.response.edit_message(embed=embed, view=view)
 
-# Tela: Painel de Controle Principal (Imagem 5)
 async def enviar_painel_controle(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🏠 Painel de Controle",
@@ -175,7 +165,6 @@ async def enviar_painel_controle(interaction: discord.Interaction):
                     "*Todas as ações são aplicadas em tempo real.*",
         color=0x2f3136
     )
-    embed.set_thumbnail(url="https://i.imgur.com/8Nf9v9e.png") # Ilustração do robozinho azul se quiser usar
     
     view = View()
     view.add_item(PainelPrincipalSelect())
@@ -199,7 +188,6 @@ async def painel_cmd(interaction: discord.Interaction):
 @bot.tree.command(name="configuracoes", description="Ajustes rápidos de vendas, termos e cargos.")
 @app_commands.checks.has_permissions(administrator=True)
 async def configuracoes_cmd(interaction: discord.Interaction):
-    # Envia a tela de configurações de vendas diretamente
     embed = discord.Embed(
         title="🛒 Configurações de Vendas",
         description="Ajuste termos, cargo de clientes e notificações de vendas.",
@@ -223,5 +211,11 @@ async def on_ready():
         print(f"Erro ao sincronizar comandos: {e}")
 
 keep_alive()
-bot.run("MTUyNjc3MjQwNTg4NjkxMDQ3NA.GzWeZT.DuORxzaAnl9z9A4QD5QviiWgxfny611LN6fcIc")
+
+# Busca de forma segura o token salvo nas variáveis do Render
+token = os.environ.get("DISCORD_TOKEN")
+if token:
+    bot.run(token)
+else:
+    print("❌ ERRO: A variável de ambiente 'DISCORD_TOKEN' não foi configurada no Render!")
     
