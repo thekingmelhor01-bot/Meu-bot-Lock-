@@ -9,262 +9,135 @@ import datetime
 # ==========================================================
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True  # Necessário para os comandos de moderação (ban, kick, mute)
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
 # ==========================================================
-# 🛡️ SISTEMA DE MODERAÇÃO (COMANDOS SLASH)
+# 🛡️ GRUPO DE COMANDOS DE MODERAÇÃO (/mod ...)
 # ==========================================================
-
-# 1. Comando: Banir Usuário (/ban)
-@bot.tree.command(name="ban", description="🛡️ [Moderação] Bane um membro do servidor")
-@app_commands.checks.has_permissions(ban_members=True)
-async def ban(interaction: discord.Interaction, membro: discord.Member, motivo: str = "Sem motivo especificado"):
-    try:
-        await membro.ban(reason=motivo)
-        embed = discord.Embed(
-            title="🔨 Usuário Banido",
-            description=f"O membro {membro.mention} foi banido com sucesso.",
-            color=discord.Color.red()
-        )
-        embed.add_field(name="Motivo:", value=motivo, inline=False)
-        embed.set_footer(text=f"Moderador: {interaction.user}")
-        await interaction.response.send_message(embed=embed)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Não consegui banir o membro. Erro: {e}", ephemeral=True)
-
-
-# 2. Comando: Expulsar Usuário (/kick)
-@bot.tree.command(name="kick", description="🛡️ [Moderação] Expulsa um membro do servidor")
-@app_commands.checks.has_permissions(kick_members=True)
-async def kick(interaction: discord.Interaction, membro: discord.Member, motivo: str = "Sem motivo especificado"):
-    try:
-        await membro.kick(reason=motivo)
-        embed = discord.Embed(
-            title="👢 Usuário Expulso",
-            description=f"O membro {membro.mention} foi expulso do servidor.",
-            color=discord.Color.orange()
-        )
-        embed.add_field(name="Motivo:", value=motivo, inline=False)
-        embed.set_footer(text=f"Moderador: {interaction.user}")
-        await interaction.response.send_message(embed=embed)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Não consegui expulsar o membro. Erro: {e}", ephemeral=True)
-
-
-# 3. Comando: Silenciar Usuário (/mute)
-@bot.tree.command(name="mute", description="🛡️ [Moderação] Silencia um usuário temporariamente (Timeout)")
-@app_commands.checks.has_permissions(moderate_members=True)
-async def mute(interaction: discord.Interaction, membro: discord.Member, tempo_minutos: int, motivo: str = "Sem motivo"):
-    try:
-        duracao = datetime.timedelta(minutes=tempo_minutos)
-        await membro.timeout(duracao, reason=motivo)
-        embed = discord.Embed(
-            title="🔇 Usuário Silenciado",
-            description=f"{membro.mention} foi colocado de castigo.",
-            color=discord.Color.gold()
-        )
-        embed.add_field(name="Duração:", value=f"{tempo_minutos} minutos", inline=True)
-        embed.add_field(name="Motivo:", value=motivo, inline=True)
-        embed.set_footer(text=f"Moderador: {interaction.user}")
-        await interaction.response.send_message(embed=embed)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Não consegui silenciar o usuário. Erro: {e}", ephemeral=True)
-
-
-# 4. Comando: Limpar Chat (/clear)
-@bot.tree.command(name="clear", description="🧹 [Moderação] Limpa mensagens do chat atual")
-@app_commands.checks.has_permissions(manage_messages=True)
-async def clear(interaction: discord.Interaction, quantidade: int):
-    if quantidade < 1 or quantidade > 100:
-        return await interaction.response.send_message("❌ Escolha um número entre 1 e 100.", ephemeral=True)
+class ModGroup(app_commands.Group, name="mod", description="Comandos de moderação do servidor"):
     
-    await interaction.response.defer(ephemeral=True) # Evita timeout da API do Discord
-    deleted = await interaction.channel.purge(limit=quantidade)
-    await interaction.followup.send(f"🧹 Chat limpo! Removi `{len(deleted)}` mensagens.", ephemeral=True)
-
-
-# ==========================================================
-# 📦 SISTEMA DE VENDAS (LOCK SYSTEM) - INTERFACES & MODAL
-# ==========================================================
-
-# Modal de Criação de Produto (O formulário interativo)
-class CriarProdutoModal(discord.ui.Modal, title="📦 Criando Produto"):
-    referencia = discord.ui.TextInput(
-        label="Referencia *", 
-        placeholder="EX: gemas-roblox",
-        required=True
-    )
-    titulo = discord.ui.TextInput(
-        label="Titulo", 
-        placeholder="Título visível do produto",
-        required=False
-    )
-    descricao = discord.ui.TextInput(
-        label="Descrição", 
-        style=discord.TextStyle.paragraph,
-        placeholder="Escreva detalhes do produto aqui...",
-        required=False,
-        max_length=2000
-    )
-    valor = discord.ui.TextInput(
-        label="Valor", 
-        placeholder="Ex: 4.60",
-        required=False
-    )
-    canais = discord.ui.TextInput(
-        label="Canais", 
-        placeholder="ID do canal onde o produto será postado",
-        required=False
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        ref = self.referencia.value
-        tit = self.titulo.value or "Sem título"
-        val = self.valor.value or "0.00"
-        
-        embed = discord.Embed(
-            title="✅ Produto Criado no Lock System!",
-            description=f"**Referência:** `{ref}`\n**Título:** {tit}\n**Valor:** R$ {val}",
-            color=discord.Color.green()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-# Menu de Gerenciamento de Produtos (Com paginação)
-class GerenciadorProdutosView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        
-    @discord.ui.select(
-        placeholder="📦 Selecione um produto para gerenciar",
-        options=[
-            discord.SelectOption(label="N1trada", description="Referência: 7-99", emoji="⚡"),
-            discord.SelectOption(label="Ativação n1trada", description="Referência: 2-02", emoji="💎"),
-            discord.SelectOption(label="Dados", description="Referência: PUXAR--DADOS", emoji="🔍")
-        ]
-    )
-    async def select_product(self, interaction: discord.Interaction, select: discord.ui.Select):
-        produto_nome = select.values[0]
-        
-        embed = discord.Embed(
-            title=f"📦 Editando: {produto_nome}",
-            description="Use as opções abaixo para alterar as configurações do produto.",
-            color=0x2f3136
-        )
-        await interaction.response.edit_message(embed=embed, view=MenuEdicaoProdutoView())
-
-    @discord.ui.button(label="Anterior", style=discord.ButtonStyle.grey, disabled=True, row=1)
-    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-
-    @discord.ui.button(label="Início", style=discord.ButtonStyle.grey, disabled=True, row=1)
-    async def home_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-
-    @discord.ui.button(label="Próxima", style=discord.ButtonStyle.grey, disabled=True, row=1)
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-
-    @discord.ui.button(label="Criar Produto", style=discord.ButtonStyle.green, emoji="➕", row=2)
-    async def create_product(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(CriarProdutoModal())
-
-    @discord.ui.button(label="Voltar", style=discord.ButtonStyle.red, row=2)
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await voltar_painel_principal(interaction)
-
-
-# Menu de Edição para o Produto Selecionado
-class MenuEdicaoProdutoView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Voltar ao Gerenciamento", style=discord.ButtonStyle.red)
-    async def back_to_management(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="⚙️ Gerenciamento de Produtos",
-            description="Gerencie ou crie os seus produtos abaixo.\n\n**Estatísticas:**\n└ Total de Produtos: **3**\n└ Ativos: **3**",
-            color=0x2f3136
-        )
-        await interaction.response.edit_message(embed=embed, view=GerenciadorProdutosView())
-
-
-# Painel de Controle Principal (Home)
-class PainelPrincipalView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.select(
-        placeholder="🏠 Selecione uma área para gerenciar",
-        options=[
-            discord.SelectOption(label="Gerenciamento de Produtos", description="Crie, edite ou remova produtos", emoji="📦"),
-            discord.SelectOption(label="Configurações de Vendas", description="Ajuste termos e cargos", emoji="⚙️")
-        ]
-    )
-    async def main_select(self, interaction: discord.Interaction, select: discord.ui.Select):
-        area = select.values[0]
-        
-        if area == "Gerenciamento de Produtos":
+    # Subcomando: /mod ban
+    @app_commands.command(name="ban", description="Bane um membro")
+    @app_commands.checks.has_permissions(ban_members=True)
+    async def ban(self, interaction: discord.Interaction, membro: discord.Member, motivo: str = "Sem motivo especificado"):
+        try:
+            await membro.ban(reason=motivo)
             embed = discord.Embed(
-                title="⚙️ Gerenciamento de Produtos",
-                description="Gerencie ou crie os seus produtos abaixo.\n\n**Estatísticas:**\n└ Total de Produtos: **3**\n└ Ativos: **3**",
-                color=0x2f3136
+                title="🔨 Usuário Banido",
+                description=f"O membro {membro.mention} foi banido com sucesso.",
+                color=discord.Color.red()
             )
-            await interaction.response.edit_message(embed=embed, view=GerenciadorProdutosView())
-            
-        elif area == "Configurações de Vendas":
-            await interaction.response.send_message("⚙️ Menu de configurações de vendas em breve...", ephemeral=True)
+            embed.add_field(name="Motivo:", value=motivo, inline=False)
+            embed.set_footer(text=f"Moderador: {interaction.user}")
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Erro ao banir: {e}", ephemeral=True)
 
-    @discord.ui.button(label="Fechar Loja", style=discord.ButtonStyle.red, emoji="🔒")
-    async def close_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🔒 A loja do Lock System foi fechada temporariamente!", ephemeral=True)
+    # Subcomando: /mod kick
+    @app_commands.command(name="kick", description="Expulsa um membro")
+    @app_commands.checks.has_permissions(kick_members=True)
+    async def kick(self, interaction: discord.Interaction, membro: discord.Member, motivo: str = "Sem motivo especificado"):
+        try:
+            await membro.kick(reason=motivo)
+            embed = discord.Embed(
+                title="👢 Usuário Expulso",
+                description=f"O membro {membro.mention} foi expulso do servidor.",
+                color=discord.Color.orange()
+            )
+            embed.add_field(name="Motivo:", value=motivo, inline=False)
+            embed.set_footer(text=f"Moderador: {interaction.user}")
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Erro ao expulsar: {e}", ephemeral=True)
+
+    # Subcomando: /mod mute
+    @app_commands.command(name="mute", description="Silencia um membro")
+    @app_commands.checks.has_permissions(moderate_members=True)
+    async def mute(self, interaction: discord.Interaction, membro: discord.Member, tempo_minutos: int, motivo: str = "Sem motivo"):
+        try:
+            duracao = datetime.timedelta(minutes=tempo_minutos)
+            await membro.timeout(duracao, reason=motivo)
+            embed = discord.Embed(
+                title="🔇 Usuário Silenciado",
+                description=f"{membro.mention} foi silenciado com sucesso.",
+                color=discord.Color.gold()
+            )
+            embed.add_field(name="Duração:", value=f"{tempo_minutos} minutos", inline=True)
+            embed.add_field(name="Motivo:", value=motivo, inline=True)
+            embed.set_footer(text=f"Moderador: {interaction.user}")
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Erro ao silenciar: {e}", ephemeral=True)
+
+# Adiciona o grupo /mod ao bot
+bot.tree.add_command(ModGroup())
 
 
-# Função Auxiliar de Navegação
-async def voltar_painel_principal(interaction: discord.Interaction):
+# ==========================================================
+# 💳 COMANDO DE COMPRA E ESTILO LOCK SYSTEM (/comprar)
+# ==========================================================
+
+@bot.tree.command(name="comprar", description="Gera um link de pagamento Pix/Cartão")
+async def comprar(interaction: discord.Interaction):
+    # Banner e estilo do embed de compra
     embed = discord.Embed(
-        title="🔒 Lock System - Painel de Controle",
-        description=f"Olá, {interaction.user.mention}! Aqui está o resumo da sua loja.\n\n**Visão Geral**\n└ Status: 🟢 **Online**\n└ Notificações pendentes: **0**",
+        title="⚡ COMPRAR NITRO LINK",
+        description="Clique no botão abaixo para gerar o seu pagamento e receber o produto automaticamente.",
         color=0x2f3136
     )
-    await interaction.response.edit_message(embed=embed, view=PainelPrincipalView())
+    embed.set_image(url="https://i.imgur.com/your_banner_here.png") # Coloque o link do seu banner de ativação aqui se quiser
+    
+    # Botão de compra interativo
+    view = discord.ui.View()
+    botao_comprar = discord.ui.Button(
+        label="Comprar", 
+        style=discord.ButtonStyle.green, 
+        emoji="🛒",
+        custom_id="btn_comprar_fluxo"
+    )
+    
+    # Callback quando clicar em "Comprar"
+    async def comprar_callback(inter: discord.Interaction):
+        # Aqui geramos o fluxo do Lock System (Modal, Pix ou carrinho temporário)
+        await inter.response.send_message("⚙️ Gerando sua chave/PIX de pagamento... Aguarde!", ephemeral=True)
+        
+    botao_comprar.callback = comprar_callback
+    view.add_item(botao_comprar)
+    
+    await interaction.response.send_message(embed=embed, view=view)
 
 
 # ==========================================================
-# 🚀 COMANDOS GERAIS & INICIALIZAÇÃO
+# 📦 OUTROS PAINÉIS DO LOCK SYSTEM (PAINEL DE ADMIN)
 # ==========================================================
 
-# Comando Slash principal para abrir a loja
-@bot.tree.command(name="painel", description="Acesse o Painel de Controle do seu Lock System")
+# Comando Slash para o painel administrativo de controle interno
+@bot.tree.command(name="painel", description="Acesse o Painel de Controle interno da sua loja")
+@app_commands.checks.has_permissions(administrator=True)
 async def painel(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🔒 Lock System - Painel de Controle",
-        description=f"Olá, {interaction.user.mention}! Aqui está o resumo da sua loja.\n\n**Visão Geral**\n└ Status: 🟢 **Online**\n└ Notificações pendentes: **0**",
+        description=f"Olá, {interaction.user.mention}! Painel administrativo.",
         color=0x2f3136
     )
-    # Abre apenas para o administrador de forma efêmera (oculta)
-    await interaction.response.send_message(embed=embed, view=PainelPrincipalView(), ephemeral=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+# ==========================================================
+# 🚀 INICIALIZAÇÃO DO BOT
+# ==========================================================
 @bot.event
 async def on_ready():
     print(f"🤖 Lock System online como {bot.user}!")
     try:
         synced = await bot.tree.sync()
-        print(f"🔄 Sincronizados {len(synced)} comandos de barra (Slash).")
+        print(f"🔄 Sincronizados {len(synced)} comandos slash.")
     except Exception as e:
-        print(f"Erro ao sincronizar comandos: {e}")
+        print(f"Erro de sincronização: {e}")
 
-
-# Tratamento de erro caso alguém tente moderar sem permissão
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message("❌ Você não tem permissões administrativas para executar este comando!", ephemeral=True)
-
-# Liga o Keep Alive do Render e inicia o bot
+# Liga o keep_alive e o bot
 keep_alive()
-bot.run("SEU_TOKEN_AQUI")  # <--- COLOQUE SEU TOKEN DO DISCORD AQUI!
-        
+bot.run("MTUyNjc3MjQwNTg4NjkxMDQ3NA.G4aEeX.nOwZN9jfai4ckh0auD9f9jKQgd3dBxLQ2s3n-A") # <--- Lembre de colar seu token aqui!
+            
