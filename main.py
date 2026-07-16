@@ -139,5 +139,5 @@ async def on_ready():
 
 # Liga o keep_alive e o bot
 keep_alive()
-bot.run("MTUyNjc3MjQwNTg4NjkxMDQ3NA.G4aEeX.nOwZN9jfai4ckh0auD9f9jKQgd3dBxLQ2s3n-A") # <--- Lembre de colar seu token aqui!
+bot.run("MTUyNjc3MjQwNTg4NjkxMDQ3NA.GzWeZT.DuORxzaAnl9z9A4QD5QviiWgxfny611LN6fcIc") # <--- Lembre de colar seu token aqui!
             
